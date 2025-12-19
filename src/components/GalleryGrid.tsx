@@ -1,9 +1,10 @@
-// src/components/gallery/GalleryGrid.tsx
-import { useState, useEffect, useCallback, useRef } from "react";
-import { motion } from "framer-motion";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import { supabase } from "@/integrations/supabase/client";
 import { Loader2, Sparkles, ImageOff } from "lucide-react";
 import { LightboxModal } from "./LightboxModal";
+
+/* ================= TYPES ================= */
 
 interface Photo {
   id: string;
@@ -14,8 +15,51 @@ interface Photo {
   is_hidden: boolean;
 }
 
+/* ================= CONST ================= */
+
 const PAGE_SIZE = 24;
 const EVENT_SLUG = "lia-xv";
+
+/* ================= PROTECTION HOOK ================= */
+
+function useBestEffortProtection(enabled: boolean) {
+  useEffect(() => {
+    if (!enabled) return;
+
+    const onContextMenu = (e: Event) => e.preventDefault();
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      const key = e.key.toLowerCase();
+      const ctrlOrCmd = e.ctrlKey || e.metaKey;
+
+      if (
+        (ctrlOrCmd && (key === "s" || key === "p" || key === "u")) ||
+        (ctrlOrCmd && e.shiftKey && (key === "i" || key === "j" || key === "c")) ||
+        key === "printscreen"
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+
+    const onDragStart = (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+    };
+
+    document.addEventListener("contextmenu", onContextMenu, { passive: false });
+    document.addEventListener("keydown", onKeyDown, { passive: false });
+    document.addEventListener("dragstart", onDragStart as any, { passive: false });
+
+    return () => {
+      document.removeEventListener("contextmenu", onContextMenu as any);
+      document.removeEventListener("keydown", onKeyDown as any);
+      document.removeEventListener("dragstart", onDragStart as any);
+    };
+  }, [enabled]);
+}
+
+/* ================= MAIN ================= */
 
 export function GalleryGrid() {
   const [photos, setPhotos] = useState<Photo[]>([]);
@@ -27,15 +71,40 @@ export function GalleryGrid() {
   const observerRef = useRef<IntersectionObserver | null>(null);
   const loadMoreRef = useRef<HTMLDivElement>(null);
 
+  useBestEffortProtection(true);
+
+  /* ================= ANIMATIONS ================= */
+
+  const listVariants = useMemo(
+    () => ({
+      hidden: {},
+      show: {
+        transition: { staggerChildren: 0.03, delayChildren: 0.05 },
+      },
+    }),
+    []
+  );
+
+  const itemVariants = useMemo(
+    () => ({
+      hidden: { opacity: 0, y: 18, scale: 0.985 },
+      show: {
+        opacity: 1,
+        y: 0,
+        scale: 1,
+        transition: { duration: 0.42, ease: [0.16, 1, 0.3, 1] },
+      },
+    }),
+    []
+  );
+
   /* ================= FETCH ================= */
 
   const fetchPhotos = useCallback(async (cursor?: string) => {
     try {
       let query = supabase
         .from("event_photos")
-        .select(
-          "id, storage_path, thumb_path, original_name, created_at, is_hidden"
-        )
+        .select("id, storage_path, thumb_path, original_name, created_at, is_hidden")
         .eq("event_slug", EVENT_SLUG)
         .eq("is_hidden", false)
         .order("created_at", { ascending: false })
@@ -46,10 +115,8 @@ export function GalleryGrid() {
       const { data, error } = await query;
       if (error) throw error;
 
-      if (data) {
-        setPhotos(prev => (cursor ? [...prev, ...data] : data));
-        setHasMore(data.length === PAGE_SIZE);
-      }
+      setPhotos(prev => (cursor ? [...prev, ...(data || [])] : data || []));
+      setHasMore((data?.length || 0) === PAGE_SIZE);
     } catch (err) {
       console.error("Gallery fetch failed:", err);
     } finally {
@@ -80,27 +147,26 @@ export function GalleryGrid() {
           const oldRow = payload.old as Photo | null;
 
           setPhotos(prev => {
-            // DELETE
             if (payload.eventType === "DELETE" && oldRow) {
               return prev.filter(p => p.id !== oldRow.id);
             }
 
-            // INSERT
             if (payload.eventType === "INSERT" && row && !row.is_hidden) {
+              if (prev.some(p => p.id === row.id)) return prev;
               return [row, ...prev];
             }
 
-            // UPDATE
             if (payload.eventType === "UPDATE" && row) {
-              // ficou oculta → remove
               if (row.is_hidden) {
                 return prev.filter(p => p.id !== row.id);
               }
-              // ficou visível → adiciona se não existir
-              const exists = prev.some(p => p.id === row.id);
-              if (!exists) {
-                return [row, ...prev];
-              }
+
+              const idx = prev.findIndex(p => p.id === row.id);
+              if (idx === -1) return [row, ...prev];
+
+              const copy = [...prev];
+              copy[idx] = row;
+              return copy;
             }
 
             return prev;
@@ -121,88 +187,56 @@ export function GalleryGrid() {
 
     observerRef.current = new IntersectionObserver(
       entries => {
-        if (
-          entries[0].isIntersecting &&
-          hasMore &&
-          !loadingMore &&
-          !loading
-        ) {
+        if (entries[0].isIntersecting && hasMore && !loadingMore && !loading) {
           setLoadingMore(true);
           const last = photos[photos.length - 1];
           if (last) fetchPhotos(last.created_at);
         }
       },
-      { threshold: 0.1 }
+      { threshold: 0.12 }
     );
 
-    if (loadMoreRef.current) {
-      observerRef.current.observe(loadMoreRef.current);
-    }
-
+    if (loadMoreRef.current) observerRef.current.observe(loadMoreRef.current);
     return () => observerRef.current?.disconnect();
   }, [photos, hasMore, loadingMore, loading, fetchPhotos]);
 
   const getPhotoUrl = (photo: Photo, thumb = true) => {
-    const path =
-      thumb && photo.thumb_path ? photo.thumb_path : photo.storage_path;
-    return supabase.storage.from("event-photos").getPublicUrl(path).data
-      .publicUrl;
+    const path = thumb && photo.thumb_path ? photo.thumb_path : photo.storage_path;
+    return supabase.storage.from("event-photos").getPublicUrl(path).data.publicUrl;
   };
 
-  /* ================= LOADING ================= */
+  /* ================= STATES ================= */
 
   if (loading) {
     return (
-      <section id="gallery" className="py-14 px-5">
-        <div className="max-w-7xl mx-auto text-center">
-          <GalleryHeader count={0} />
-          <motion.div
-            animate={{ rotate: 360 }}
-            transition={{ duration: 1.4, repeat: Infinity, ease: "linear" }}
-            className="inline-block mt-16"
-          >
-            <Loader2 className="w-8 h-8 text-primary-deep" />
-          </motion.div>
-        </div>
+      <section id="gallery" className="py-14 px-5 text-center">
+        <Loader2 className="w-8 h-8 animate-spin mx-auto text-primary-deep" />
       </section>
     );
   }
-
-  /* ================= EMPTY ================= */
 
   if (photos.length === 0) {
     return (
-      <section id="gallery" className="py-14 px-5">
-        <div className="max-w-7xl mx-auto">
-          <GalleryHeader count={0} />
-          <motion.div
-            className="mx-auto max-w-sm rounded-3xl border border-white/60 bg-white/55 backdrop-blur-xl p-10 text-center shadow-[0_30px_80px_rgba(0,0,0,0.12)]"
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-          >
-            <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-white/70">
-              <ImageOff className="h-8 w-8 text-slate-400" />
-            </div>
-            <p className="font-display text-xl text-slate-700 mb-2">
-              Ainda não há fotos
-            </p>
-            <p className="text-sm text-slate-500">
-              Seja o primeiro a compartilhar um momento especial!
-            </p>
-          </motion.div>
-        </div>
+      <section id="gallery" className="py-14 px-5 text-center">
+        <ImageOff className="w-10 h-10 mx-auto text-slate-400 mb-3" />
+        <p className="text-slate-600">Ainda não há fotos</p>
       </section>
     );
   }
 
-  /* ================= GRID ================= */
+  /* ================= RENDER ================= */
 
   return (
-    <section id="gallery" className="py-14 px-5">
+    <section id="gallery" className="py-14 px-5 select-none">
       <div className="max-w-7xl mx-auto">
         <GalleryHeader count={photos.length} />
 
-        <div className="masonry-grid">
+        <motion.div
+          className="masonry-grid"
+          variants={listVariants}
+          initial="hidden"
+          animate="show"
+        >
           {photos.map((photo, index) => (
             <PhotoCard
               key={photo.id}
@@ -210,17 +244,25 @@ export function GalleryGrid() {
               index={index}
               onClick={() => setSelectedIndex(index)}
               getPhotoUrl={getPhotoUrl}
+              itemVariants={itemVariants}
             />
           ))}
-        </div>
+        </motion.div>
 
         <div ref={loadMoreRef} className="py-10 flex justify-center">
-          {loadingMore && (
-            <div className="flex items-center gap-2 text-slate-400">
-              <Loader2 className="w-5 h-5 animate-spin text-primary-deep" />
-              <span className="text-sm">Carregando mais…</span>
-            </div>
-          )}
+          <AnimatePresence>
+            {loadingMore && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="flex items-center gap-2 text-slate-400"
+              >
+                <Loader2 className="w-5 h-5 animate-spin" />
+                <span className="text-sm">Carregando mais…</span>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
       </div>
 
@@ -234,6 +276,13 @@ export function GalleryGrid() {
         onClose={() => setSelectedIndex(null)}
         onNavigate={setSelectedIndex}
       />
+
+      <style>{`
+        @media print {
+          #gallery { display: none !important; }
+        }
+        .protected-image { -webkit-touch-callout: none; }
+      `}</style>
     </section>
   );
 }
@@ -242,26 +291,14 @@ export function GalleryGrid() {
 
 function GalleryHeader({ count }: { count: number }) {
   return (
-    <motion.div
-      className="text-center mb-12"
-      initial={{ opacity: 0, y: 20 }}
-      whileInView={{ opacity: 1, y: 0 }}
-      viewport={{ once: true }}
-    >
-      <div className="flex items-center justify-center gap-3 mb-3">
+    <div className="text-center mb-12">
+      <div className="flex items-center justify-center gap-3 mb-2">
         <Sparkles className="w-5 h-5 text-slate-400" />
-        <h2 className="font-display text-3xl sm:text-4xl text-slate-700">
-          Fotos da Noite
-        </h2>
+        <h2 className="font-display text-3xl text-slate-700">Fotos da Noite</h2>
         <Sparkles className="w-5 h-5 text-slate-400" />
       </div>
-      {count > 0 && (
-        <p className="text-slate-500">
-          {count} momento{count !== 1 ? "s" : ""} compartilhado
-          {count !== 1 ? "s" : ""}
-        </p>
-      )}
-    </motion.div>
+      <p className="text-slate-500">{count} momentos compartilhados</p>
+    </div>
   );
 }
 
@@ -272,49 +309,32 @@ interface PhotoCardProps {
   index: number;
   onClick: () => void;
   getPhotoUrl: (photo: Photo, useThumb?: boolean) => string;
+  itemVariants: any;
 }
 
-function PhotoCard({ photo, index, onClick, getPhotoUrl }: PhotoCardProps) {
+function PhotoCard({ photo, index, onClick, getPhotoUrl, itemVariants }: PhotoCardProps) {
   const [loaded, setLoaded] = useState(false);
-  const [error, setError] = useState(false);
-
-  const delay = (index % 6) * 0.06;
-
-  if (error) {
-    return (
-      <div className="aspect-square rounded-2xl bg-slate-100 flex items-center justify-center">
-        <ImageOff className="w-8 h-8 text-slate-400" />
-      </div>
-    );
-  }
+  const delay = (index % 10) * 0.025;
 
   return (
     <motion.div
-      className="relative aspect-square overflow-hidden rounded-2xl border border-white/50 bg-white/40 backdrop-blur-md shadow-[0_18px_60px_rgba(0,0,0,0.12)] cursor-pointer"
-      initial={{ opacity: 0, y: 30, scale: 0.96 }}
-      whileInView={{ opacity: 1, y: 0, scale: 1 }}
-      viewport={{ once: true, margin: "-40px" }}
-      transition={{ duration: 0.45, delay, ease: [0.16, 1, 0.3, 1] }}
+      variants={itemVariants}
+      transition={{ delay }}
+      className="relative aspect-square overflow-hidden rounded-2xl cursor-pointer"
       onClick={onClick}
       onContextMenu={e => e.preventDefault()}
     >
-      {!loaded && (
-        <div className="absolute inset-0 bg-gradient-to-br from-slate-200/60 to-slate-100/60 animate-pulse" />
-      )}
+      {!loaded && <div className="absolute inset-0 bg-slate-200 animate-pulse" />}
 
       <img
         src={getPhotoUrl(photo)}
-        alt={photo.original_name || "Momento especial"}
-        className={`protected-image h-full w-full object-cover transition-all duration-700 ${
-          loaded ? "opacity-100 scale-100" : "opacity-0 scale-105"
+        alt={photo.original_name || "Foto"}
+        className={`protected-image h-full w-full object-cover transition-opacity duration-700 ${
+          loaded ? "opacity-100" : "opacity-0"
         }`}
-        loading="lazy"
         draggable={false}
         onLoad={() => setLoaded(true)}
-        onError={() => setError(true)}
       />
-
-      <div className="pointer-events-none absolute inset-0 bg-gradient-to-tr from-white/0 via-white/0 to-blue-200/10" />
     </motion.div>
   );
 }

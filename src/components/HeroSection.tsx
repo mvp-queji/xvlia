@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useMemo } from "react";
 import { Camera, Sparkles, ChevronDown } from "lucide-react";
 import { motion } from "framer-motion";
 import { useHeroImages } from "@/hooks/useHeroImages";
@@ -11,7 +11,7 @@ interface HeroSectionProps {
 const EVENT_SLUG = "lia-xv";
 
 export function HeroSection({ onUploadClick, onGalleryClick }: HeroSectionProps) {
-  const { urls, loading } = useHeroImages(EVENT_SLUG);
+  const { urls } = useHeroImages(EVENT_SLUG);
 
   const bgImage = useMemo(() => {
     return urls.filter(Boolean)[0] ?? null;
@@ -53,22 +53,91 @@ export function HeroSection({ onUploadClick, onGalleryClick }: HeroSectionProps)
 
         {/* XV PRATA 3D — FINAL DA HERO */}
         <div className="pointer-events-none absolute inset-x-0 bottom-6 z-20 flex justify-center">
-          <div
-            className="select-none leading-none"
-            style={{
-              fontSize: "clamp(120px, 32vw, 220px)",
-              fontFamily: "ui-serif, 'Playfair Display', serif",
-              background:
-                "linear-gradient(180deg, #ffffff 0%, #e6e8ec 18%, #b8bcc4 38%, #f5f6f8 55%, #9aa0aa 72%, #ffffff 100%)",
-              WebkitBackgroundClip: "text",
-              backgroundClip: "text",
-              color: "transparent",
-              textShadow:
-                "0 6px 12px rgba(255,255,255,0.6), 0 22px 60px rgba(0,0,0,0.25)",
-              opacity: 0.95,
-            }}
-          >
-            XV
+          {/* Container relativo para empilhar base + brilho */}
+          <div className="relative select-none leading-none">
+            {/* Texto base (metal) */}
+            <div
+              className="relative"
+              style={{
+                fontSize: "clamp(120px, 32vw, 220px)",
+                fontFamily: "ui-serif, 'Playfair Display', serif",
+                background:
+                  "linear-gradient(180deg, #ffffff 0%, #e6e8ec 18%, #b8bcc4 38%, #f5f6f8 55%, #9aa0aa 72%, #ffffff 100%)",
+                WebkitBackgroundClip: "text",
+                backgroundClip: "text",
+                color: "transparent",
+                textShadow:
+                  "0 6px 12px rgba(255,255,255,0.6), 0 22px 60px rgba(0,0,0,0.25)",
+                opacity: 0.95,
+                filter: "saturate(1.05) contrast(1.05)",
+              }}
+            >
+              XV
+            </div>
+
+            {/* Brilho animado (specular sweep) — overlay clipado no texto */}
+            <motion.div
+              className="absolute inset-0"
+              aria-hidden="true"
+              initial={{ opacity: 0.0 }}
+              animate={{ opacity: [0.0, 0.65, 0.0] }}
+              transition={{
+                duration: 3.6,
+                repeat: Infinity,
+                ease: "easeInOut",
+                times: [0, 0.5, 1],
+              }}
+              style={{
+                // Mesma tipografia/tamanho para encaixar perfeitamente
+                fontSize: "clamp(120px, 32vw, 220px)",
+                fontFamily: "ui-serif, 'Playfair Display', serif",
+                // O truque: um gradiente estreito bem “quente” que varre a área
+                background:
+                  "linear-gradient(120deg, transparent 0%, rgba(255,255,255,0.0) 35%, rgba(255,255,255,0.95) 48%, rgba(255,255,255,0.0) 62%, transparent 100%)",
+                WebkitBackgroundClip: "text",
+                backgroundClip: "text",
+                color: "transparent",
+                // um brilho extra sem parecer neon
+                textShadow:
+                  "0 0 18px rgba(255,255,255,0.55), 0 18px 42px rgba(255,255,255,0.25)",
+                // máscara dinâmica via backgroundPosition com motion
+                backgroundSize: "240% 100%",
+              }}
+            >
+              <motion.span
+                style={{
+                  display: "inline-block",
+                  WebkitBackgroundClip: "text",
+                  backgroundClip: "text",
+                }}
+                animate={{
+                  backgroundPositionX: ["-120%", "120%"],
+                }}
+                transition={{
+                  duration: 3.6,
+                  repeat: Infinity,
+                  ease: "easeInOut",
+                }}
+              >
+                XV
+              </motion.span>
+            </motion.div>
+
+            {/* Micro “glow” de contorno (bem sutil) para dar volume premium */}
+            <div
+              className="absolute inset-0"
+              aria-hidden="true"
+              style={{
+                fontSize: "clamp(120px, 32vw, 220px)",
+                fontFamily: "ui-serif, 'Playfair Display', serif",
+                color: "transparent",
+                WebkitTextStroke: "1px rgba(255,255,255,0.18)",
+                filter: "blur(0.2px)",
+                opacity: 0.9,
+              }}
+            >
+              XV
+            </div>
           </div>
         </div>
       </div>
@@ -102,8 +171,6 @@ export function HeroSection({ onUploadClick, onGalleryClick }: HeroSectionProps)
               <Sparkles className="w-5 h-5" />
               <span>Ver galeria de fotos</span>
             </button>
-
-          
           </div>
 
           <motion.div
@@ -121,8 +188,6 @@ export function HeroSection({ onUploadClick, onGalleryClick }: HeroSectionProps)
               <ChevronDown className="w-5 h-5" />
             </motion.div>
           </motion.div>
-
-      
         </div>
       </div>
     </section>
